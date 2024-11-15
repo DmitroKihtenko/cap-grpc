@@ -1,0 +1,28 @@
+servers:
+  - alias: 'Book API'
+    sockets:
+      - socket: 'localhost:8100'
+      - socket: 'localhost:8200'
+    reflection_enabled: true
+    proto_files:
+      - "book-service.proto"
+    mocks:
+      com.book.BookService:
+        GetBook:
+          value:
+            id: 10
+            name: "The Dictionary of Demons: Expanded and Revised: Names of the Damned"
+            type: "ENCYCLOPEDIA"
+            author:
+              first_name: "Michael"
+              last_name: "Belanger"
+          metadata:
+            custom_metadata: metadata
+        AddBook:
+          error:
+            code: 16
+            details: "Unauthorized. Credentials required"
+        GetBooksList:
+          proxy:
+            socket: "original-book-service-host:8100"
+            seconds_timeout: 10
