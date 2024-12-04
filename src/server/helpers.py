@@ -1,15 +1,25 @@
 import copy
-import inspect
-from types import ModuleType
-from typing import Callable
+import logging
+from typing import Type
 
+from google.protobuf.descriptor import (
+    FieldDescriptor,
+)
+from google.protobuf.descriptor_pool import DescriptorPool
 from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
+from google.protobuf.message import Message
+from google.protobuf.message_factory import GetMessageClass
 from grpc import StatusCode
 
-from model.config import GRPCErrorCode
+from config.model import GRPCErrorCode
 from protobuf.definitions import (
-    GeneratedData, ProtoFileStructure, ServiceData, MessageData, EnumData
+    ProtoFileStructure,
+    MessageData,
+    EnumData,
 )
+from protobuf.types import ProtoType
+
+logger = logging.getLogger(__name__)
 
 
 def get_grpc_status_code(value: GRPCErrorCode) -> StatusCode:
@@ -19,21 +29,40 @@ def get_grpc_status_code(value: GRPCErrorCode) -> StatusCode:
     return StatusCode.UNKNOWN
 
 
-class ProtoObjectResolver:
-    SERVICER_FORMAT = "{}Servicer"
-    STUB_FORMAT = "{}Stub"
-    SERVICER_FUNCTIONS_FORMAT = "add_{}Servicer_to_server"
+PROTO_TYPE_INTERNAL_DATA = {
+    ProtoType.DOUBLE: FieldDescriptor.TYPE_DOUBLE,
+    ProtoType.FLOAT: FieldDescriptor.TYPE_FLOAT,
+    ProtoType.INT64: FieldDescriptor.TYPE_INT64,
+    ProtoType.UINT64: FieldDescriptor.TYPE_UINT64,
+    ProtoType.INT32: FieldDescriptor.TYPE_INT32,
+    ProtoType.FIXED64: FieldDescriptor.TYPE_FIXED64,
+    ProtoType.FIXED32: FieldDescriptor.TYPE_FIXED32,
+    ProtoType.BOOL: FieldDescriptor.TYPE_BOOL,
+    ProtoType.STRING: FieldDescriptor.TYPE_STRING,
+    ProtoType.GROUP: FieldDescriptor.TYPE_GROUP,
+    ProtoType.MESSAGE: FieldDescriptor.TYPE_MESSAGE,
+    ProtoType.BYTES: FieldDescriptor.TYPE_BYTES,
+    ProtoType.UINT32: FieldDescriptor.TYPE_UINT32,
+    ProtoType.ENUM: FieldDescriptor.TYPE_ENUM,
+    ProtoType.SFIXED32: FieldDescriptor.TYPE_SFIXED32,
+    ProtoType.SFIXED64: FieldDescriptor.TYPE_SFIXED64,
+    ProtoType.SINT32: FieldDescriptor.TYPE_SINT32,
+    ProtoType.SINT64: FieldDescriptor.TYPE_SINT64,
+}
 
+
+class ProtoObjectResolver:
     def __init__(
         self,
-        generated_data: GeneratedData,
-        grpc_modules: dict[str, ModuleType],
         proto_structures: dict[str, ProtoFileStructure],
+        descriptor_pool: DescriptorPool,
     ):
-        self._generated_data = generated_data
-        self._modules = grpc_modules
         self._structures = proto_structures
         self._summarized_structure = self._summarize_proto_structure()
+
+        self._descriptor_pool = descriptor_pool
+        self._message_types = self._create_messages_types()
+        self._enum_types = self._create_enum_types()
 
     def _summarize_proto_structure(self) -> ProtoFileStructure | None:
         result = None
@@ -47,201 +76,58 @@ class ProtoObjectResolver:
         return result
 
     @property
-    def generated_data(self) -> GeneratedData:
-        return self._generated_data
-
-    @property
-    def grpc_modules(self) -> dict[str, ModuleType]:
-        return self._modules
-
-    @property
-    def structures(self) -> dict[str, ProtoFileStructure]:
-        return self._structures
+    def pool(self) -> DescriptorPool:
+        return self._descriptor_pool
 
     @property
     def summarized_structure(self) -> ProtoFileStructure:
         return self._summarized_structure
 
-    def get_stub_type(self, service_data: ServiceData) -> type | None:
-        object_data = None
-        target_proto_file = None
+    @property
+    def structures(self) -> dict[str, ProtoFileStructure]:
+        return self._structures
 
-        for proto_file, structure in self._structures.items():
-            if service_data.full_name in structure.services:
-                target_proto_file = proto_file
-        if target_proto_file is None:
-            return None
-
-        spec_names = self._generated_data.proto_file_to_source.get(
-            target_proto_file
-        )
-        if spec_names is None:
-            return None
-
-        for spec_name in spec_names:
-            if spec_name not in self._modules:
-                continue
-            object_data = getattr(
-                self._modules[spec_name],
-                self.STUB_FORMAT.format(service_data.name),
-                None,
+    def _create_messages_types(self) -> dict[str, Type[Message]]:
+        result = {}
+        for message_data in self.summarized_structure.messages.values():
+            key = message_data.full_name
+            result[key] = GetMessageClass(
+                self._descriptor_pool.FindMessageTypeByName(key)
             )
-            if not inspect.isclass(object_data):
-                object_data = None
-            if object_data is not None:
-                break
+        return result
 
-        return object_data
-
-    def get_servicer_type(self, service_data: ServiceData) -> type | None:
-        object_data = None
-        target_proto_file = None
-
-        for proto_file, structure in self._structures.items():
-            if service_data.full_name in structure.services:
-                target_proto_file = proto_file
-        if target_proto_file is None:
-            return None
-
-        spec_names = self._generated_data.proto_file_to_source.get(
-            target_proto_file
-        )
-        if spec_names is None:
-            return None
-
-        for spec_name in spec_names:
-            if spec_name not in self._modules:
-                continue
-            object_data = getattr(
-                self._modules[spec_name],
-                self.SERVICER_FORMAT.format(service_data.name),
-                None,
+    def _create_enum_types(self) -> dict[str, EnumTypeWrapper]:
+        result = {}
+        for enum_data in self.summarized_structure.enums.values():
+            key = enum_data.full_name
+            result[key] = EnumTypeWrapper(
+                self._descriptor_pool.FindEnumTypeByName(key)
             )
-            if not inspect.isclass(object_data):
-                object_data = None
-            if object_data is not None:
-                break
+        return result
 
-        return object_data
+    def get_descriptor_pool(self) -> DescriptorPool:
+        return self._descriptor_pool
 
-    def get_message_type(self, message_data: MessageData) -> type | None:
-        object_data = None
-        target_proto_file = None
-
-        for proto_file, structure in self._structures.items():
-            if message_data.full_name in structure.messages:
-                target_proto_file = proto_file
-        if target_proto_file is None:
-            return None
-
-        spec_names = self._generated_data.proto_file_to_source.get(
-            target_proto_file
-        )
-        if spec_names is None:
-            return None
-
-        parent_full_name = message_data.message
-        attributes = [message_data.name]
-        while parent_full_name is not None:
-            new_message_data = self.summarized_structure.messages[
-                parent_full_name
-            ]
-            parent_full_name = new_message_data.message
-            attributes.append(new_message_data.name)
-        attributes.reverse()
-
-        source = None
-        for spec_name in spec_names:
-            if spec_name not in self._modules:
-                continue
-            source = self._modules[spec_name]
-
-            for attribute in attributes:
-                source = getattr(source, attribute, None)
-                if not inspect.isclass(source):
-                    source = None
-                if source is None:
-                    break
-            if source is not None:
-                break
-        if source is not None:
-            object_data = source
-
-        return object_data
-
-    def get_enum_type(
-        self,
-        enum_data: EnumData,
-    ) -> EnumTypeWrapper | None:
-        object_data = None
-        target_proto_file = None
-
-        for proto_file, structure in self._structures.items():
-            if enum_data.full_name in structure.enums:
-                target_proto_file = proto_file
-        if target_proto_file is None:
-            return None
-
-        spec_names = self._generated_data.proto_file_to_source.get(
-            target_proto_file
-        )
-        if spec_names is None:
-            return None
-
-        message_full_name = enum_data.message
-        attributes = [enum_data.name]
-        while message_full_name is not None:
-            message_data = self.summarized_structure.messages[
-                message_full_name
-            ]
-            message_full_name = message_data.message
-            attributes.append(message_data.name)
-        attributes.reverse()
-
-        source = None
-        for spec_name in spec_names:
-            if spec_name not in self._modules:
-                continue
-            source = self._modules[spec_name]
-
-            for attribute in attributes:
-                source = getattr(source, attribute, None)
-                if source is None:
-                    break
-            if source is not None:
-                break
-        if source is not None:
-            object_data = source
-
-        return object_data
-
-    def get_servicer_function(self, service_data: ServiceData) -> Callable | None:
-        object_data = None
-        target_proto_file = None
-
-        for proto_file, structure in self._structures.items():
-            if service_data.full_name in structure.services:
-                target_proto_file = proto_file
-        if target_proto_file is None:
-            return None
-
-        spec_names = self._generated_data.proto_file_to_source.get(
-            target_proto_file
-        )
-        if spec_names is None:
-            return None
-
-        for spec_name in spec_names:
-            if spec_name not in self._modules:
-                continue
-            object_data = getattr(
-                self._modules[spec_name],
-                self.SERVICER_FUNCTIONS_FORMAT.format(service_data.name),
-                None,
+    def get_enum_type(self, enum_data: EnumData) -> EnumTypeWrapper:
+        enum_type = self._enum_types.get(enum_data.full_name)
+        if enum_type is None:
+            message = (
+                f"Error processing enum type '{enum_data.full_name}': "
+                f"object descriptor not found"
             )
-            if not inspect.isfunction(object_data):
-                object_data = None
-            if object_data is not None:
-                break
 
-        return object_data
+            logger.error(message)
+            raise KeyError(message)
+        return enum_type
+
+    def get_message_type(self, message_data: MessageData) -> Type[Message]:
+        descriptor = self._message_types.get(message_data.full_name)
+        if descriptor is None:
+            message = (
+                f"Error processing message type '{message_data.full_name}': "
+                f"object descriptor not found"
+            )
+
+            logger.error(message)
+            raise KeyError(message)
+        return descriptor
