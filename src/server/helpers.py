@@ -2,9 +2,7 @@ import copy
 import logging
 from typing import Type
 
-from google.protobuf.descriptor import (
-    FieldDescriptor,
-)
+from google.protobuf.descriptor import FieldDescriptor
 from google.protobuf.descriptor_pool import DescriptorPool
 from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 from google.protobuf.message import Message
