@@ -1,9 +1,10 @@
-import re
 from datetime import datetime
 import logging
 from typing import Set, Iterable
 
 import yaml
+
+from constants import PY_LOGS_FORMAT_PATTERN
 
 
 class YamlFormatter(logging.Formatter):
@@ -11,8 +12,7 @@ class YamlFormatter(logging.Formatter):
         logging.Formatter.__init__(self, *args, **kwargs)
 
         if isinstance(used_keys, str):
-            pattern = r"%\(([^)]+)\)s"
-            used_keys = re.findall(pattern, used_keys)
+            used_keys = PY_LOGS_FORMAT_PATTERN.findall(used_keys)
         elif used_keys is None:
             used_keys = {"msg"}
         self.used_keys = used_keys
@@ -29,9 +29,11 @@ class YamlFormatter(logging.Formatter):
         values = dict(record.__dict__)
         values.pop("args")
         if record.args:
-            values["msg"] = record.msg % record.args
+            values["message"] = record.msg % record.args
             if "color_message" in values.keys():
                 values["color_message"] = values["color_message"] % record.args
+        else:
+            values["message"] = record.msg
 
         return values
 

@@ -2,21 +2,20 @@ servers:
   - alias: 'Book API'
     sockets:
       - socket: 'localhost:8100'
-      - socket: 'localhost:8200'
     reflection_enabled: true
     proto_files:
       - "book-service.proto"
     mocks:
       com.book.BookService:
         GetBook:
-          value:
-            id: 10
+          messages:
+            id: "{{message.id}}"
             name: "The Dictionary of Demons: Expanded and Revised: Names of the Damned"
             type: "ENCYCLOPEDIA"
             author:
               first_name: "Michael"
               last_name: "Belanger"
-          metadata:
+          trailing_meta:
             custom_metadata: metadata
         AddBook:
           error:

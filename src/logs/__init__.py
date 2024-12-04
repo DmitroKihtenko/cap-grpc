@@ -31,6 +31,7 @@ def configure_logger(
     if handlers is not None:
         logger.handlers.clear()
         logger.handlers.extend(handlers)
+    logger.propagate = False
 
 
 def configure_logger_by_name(

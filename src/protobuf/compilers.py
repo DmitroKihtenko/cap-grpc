@@ -1,151 +1,104 @@
-import os
 import tempfile
-from types import ModuleType
 
-from google.protobuf import descriptor_pool
+from google.protobuf import descriptor_pb2 as proto
 from google.protobuf.descriptor import (
-    FileDescriptor,
     Descriptor,
     FieldDescriptor,
     EnumDescriptor,
     EnumValueDescriptor,
-    ServiceDescriptor,
+    ServiceDescriptor, MethodDescriptor,
 )
-
+from google.protobuf.descriptor_pool import DescriptorPool
 from grpc_tools import protoc
 
-from protobuf.types import GRPCType
+from constants import DESCRIPTOR_TEMP_FILENAME
+from protobuf.types import ProtoType
 from protobuf.definitions import (
-    ParameterData,
+    InMethodMessageData,
     MethodData,
-    EnumProperty,
-    MessageProperty,
+    EnumField,
+    MessageField,
     EnumData,
     MessageData,
     ServiceData,
     ProtoFileStructure,
     ProtoFilesPaths,
-    GeneratedData,
     PropertyLabel,
 )
-from protobuf.importers import import_in_memory_module_code
-from protobuf.utils import get_python_spec_by_proto_path
-from utils import read_file
+from utils import read_file_bytes, get_relative_abs_path
 
 G_PRTBF_T_INDEX_TO_TYPE = {
-    FieldDescriptor.TYPE_DOUBLE: GRPCType.DOUBLE,
-    FieldDescriptor.TYPE_FLOAT: GRPCType.FLOAT,
-    FieldDescriptor.TYPE_INT64: GRPCType.INT64,
-    FieldDescriptor.TYPE_UINT64: GRPCType.UINT64,
-    FieldDescriptor.TYPE_INT32: GRPCType.INT32,
-    FieldDescriptor.TYPE_FIXED64: GRPCType.FIXED64,
-    FieldDescriptor.TYPE_FIXED32: GRPCType.FIXED32,
-    FieldDescriptor.TYPE_BOOL: GRPCType.BOOL,
-    FieldDescriptor.TYPE_STRING: GRPCType.STRING,
-    FieldDescriptor.TYPE_GROUP: GRPCType.GROUP,
-    FieldDescriptor.TYPE_MESSAGE: GRPCType.MESSAGE,
-    FieldDescriptor.TYPE_BYTES: GRPCType.BYTES,
-    FieldDescriptor.TYPE_UINT32: GRPCType.UINT32,
-    FieldDescriptor.TYPE_ENUM: GRPCType.ENUM,
-    FieldDescriptor.TYPE_SFIXED32: GRPCType.SFIXED32,
-    FieldDescriptor.TYPE_SFIXED64: GRPCType.SFIXED64,
-    FieldDescriptor.TYPE_SINT32: GRPCType.SINT32,
-    FieldDescriptor.TYPE_SINT64: GRPCType.SINT64,
+    FieldDescriptor.TYPE_DOUBLE: ProtoType.DOUBLE,
+    FieldDescriptor.TYPE_FLOAT: ProtoType.FLOAT,
+    FieldDescriptor.TYPE_INT64: ProtoType.INT64,
+    FieldDescriptor.TYPE_UINT64: ProtoType.UINT64,
+    FieldDescriptor.TYPE_INT32: ProtoType.INT32,
+    FieldDescriptor.TYPE_FIXED64: ProtoType.FIXED64,
+    FieldDescriptor.TYPE_FIXED32: ProtoType.FIXED32,
+    FieldDescriptor.TYPE_BOOL: ProtoType.BOOL,
+    FieldDescriptor.TYPE_STRING: ProtoType.STRING,
+    FieldDescriptor.TYPE_GROUP: ProtoType.GROUP,
+    FieldDescriptor.TYPE_MESSAGE: ProtoType.MESSAGE,
+    FieldDescriptor.TYPE_BYTES: ProtoType.BYTES,
+    FieldDescriptor.TYPE_UINT32: ProtoType.UINT32,
+    FieldDescriptor.TYPE_ENUM: ProtoType.ENUM,
+    FieldDescriptor.TYPE_SFIXED32: ProtoType.SFIXED32,
+    FieldDescriptor.TYPE_SFIXED64: ProtoType.SFIXED64,
+    FieldDescriptor.TYPE_SINT32: ProtoType.SINT32,
+    FieldDescriptor.TYPE_SINT64: ProtoType.SINT64,
 }
 
-def read_source_files(
-    dir: str, files_suffixes: list[str], prefix: str | None = None
-):
-    result = {}
 
-    for filename in os.listdir(dir):
-        target_file_abs = os.path.join(dir, filename)
-        if os.path.isdir(target_file_abs):
-            result.update(read_source_files(
-                target_file_abs, files_suffixes, filename
-            ))
-        else:
-            for suffix in files_suffixes:
-                if filename.endswith(suffix):
-                    filepath = os.path.join(dir, filename)
-                    key = filename
-                    if prefix is not None:
-                        key = f"{prefix}.{filename}"
-                    result[key] = read_file(filepath)
-    return result
+def update_if_map(message_data: MessageData):
+    is_map = False
+    if message_data.name.endswith("Entry"):
+        if len(message_data.fields) == 2:
+            if message_data.fields[0].name in {
+                "key", "value"
+            } and message_data.fields[1].name in {"key", "value"}:
+                is_map = True
+    if is_map:
+        message_data.is_map = True
 
 
-class GRPCSourceGenerator:
-    SOURCE_FILES_SUFFIXES = ["_pb2.py", "_pb2_grpc.py"]
+def generate_descriptor_pool(proto_paths: ProtoFilesPaths):
+    pool = DescriptorPool()
 
-    def __init__(self, proto_paths: ProtoFilesPaths):
-        self._proto_paths = proto_paths
+    with tempfile.TemporaryDirectory() as dir_name:
+        descriptor_abs = get_relative_abs_path(dir_name, DESCRIPTOR_TEMP_FILENAME)
+        command_code = protoc.main((
+            "",
+            f"-I{proto_paths.base_dir_abs}",
+            f"--descriptor_set_out={descriptor_abs}",
+            *proto_paths.proto_files_abs,
+        ))
+        if command_code != 0:
+            raise RuntimeError("Proto files compilation failed")
 
-    @property
-    def proto_paths(self) -> ProtoFilesPaths:
-        return self._proto_paths
-
-    def _read_source_files(self, dir: str, files_suffixes: list[str]):
-        result = {}
-
-        for filename in os.listdir(dir):
-            if os.path.isdir(filename):
-                return self._read_source_files(filename, files_suffixes)
-            else:
-                for suffix in files_suffixes:
-                    if filename.endswith(suffix):
-                        filepath = os.path.join(dir, filename)
-                        result[filename] = read_file(filepath)
-        return result
-
-    def generate_source_files(self) -> GeneratedData:
-        with tempfile.TemporaryDirectory() as temp_output_dir:
-            command_code = protoc.main((
-                "",
-                f"-I{self.proto_paths.base_dir_abs}",
-                f"--python_out={temp_output_dir}",
-                f"--grpc_python_out={temp_output_dir}",
-                *self.proto_paths.proto_files_abs,
-            ))
-
-            if command_code != 0:
-                raise RuntimeError("Proto files compilation failed")
-
-            result = read_source_files(
-                temp_output_dir, self.SOURCE_FILES_SUFFIXES
-            )
-            proto_file_to_source = {}
-            for path in self.proto_paths.get_proto_files_relative():
-                proto_file_to_source[path] = get_python_spec_by_proto_path(
-                    path
-                )
-            return GeneratedData(
-                source_files=result,
-                proto_file_to_source=proto_file_to_source
-            )
+        descriptor_set = proto.FileDescriptorSet()
+        data = read_file_bytes(descriptor_abs)
+        descriptor_set.ParseFromString(data)
+        for file_proto in descriptor_set.file:
+            pool.Add(file_proto)
+    return pool
 
 
-class GRPCCompiler:
+class StructureParser:
     def __init__(
         self,
+        pool: DescriptorPool,
         proto_paths: ProtoFilesPaths,
-        generated_data: GeneratedData,
     ):
+        self._descriptor_pool = pool
         self._proto_paths = proto_paths
-        self._generated_data = generated_data
-        self._proto_structure = {}
 
     @property
-    def proto_structure(self) -> dict[str, ProtoFileStructure]:
-        return self._proto_structure
+    def descriptor_pool(self) -> DescriptorPool:
+        return self._descriptor_pool
 
     @property
     def proto_paths(self) -> ProtoFilesPaths:
         return self._proto_paths
-
-    @property
-    def generated_data(self) -> GeneratedData:
-        return self._generated_data
 
     def _parse_message(
         self,
@@ -153,16 +106,41 @@ class GRPCCompiler:
         messages_result: dict[str, MessageData],
         enums_result: dict[str, EnumData]
     ):
-        message_data: Descriptor
-        properties = []
-        message = None
+        if message_data.full_name in messages_result:
+            return
+
+        fields = []
+        nested_messages = []
+        nested_enums = []
+        parent_message = None
+
         if message_data.containing_type is not None:
-            message = message_data.containing_type.full_name
+            parent_message = message_data.containing_type.full_name
+
+        for message_descriptor in message_data.nested_types:
+            message_descriptor: Descriptor
+            nested_messages.append(message_descriptor.full_name)
+
+        for enum_descriptor in message_data.enum_types:
+            enum_descriptor: EnumDescriptor
+            nested_enums.append(enum_descriptor.full_name)
+
+        result_message = MessageData(
+            name=message_data.name,
+            parent_message=parent_message,
+            nested_messages=nested_messages,
+            nested_enums=nested_enums,
+            full_name=message_data.full_name,
+            fields=[],
+        )
+        messages_result[message_data.full_name] = result_message
 
         for field_name, field in message_data.fields_by_name.items():
-            nested_message = None
-
             field: FieldDescriptor
+            nested_message = None
+            nested_enum = None
+            default = None
+            is_map = False
 
             label = PropertyLabel.OPTIONAL
             if field.label == field.LABEL_REQUIRED:
@@ -175,70 +153,80 @@ class GRPCCompiler:
                 self._parse_message(
                     field.message_type, messages_result, enums_result
                 )
-            nested_enum = None
+
             if field.enum_type is not None:
                 nested_enum = field.enum_type.full_name
                 self._parse_enum(field.enum_type, enums_result)
 
-            properties.append(MessageProperty(
-                nested_message=nested_message,
-                nested_enum=nested_enum,
+            if field.has_default_value:
+                default = field.default_value
+
+            if nested_message is not None:
+                if nested_message in messages_result:
+                    is_map = messages_result[nested_message].is_map
+
+            fields.append(MessageField(
+                message_type=nested_message,
+                enum_type=nested_enum,
                 name=field.name,
-                grpc_type=G_PRTBF_T_INDEX_TO_TYPE[field.type],
+                simple_type=G_PRTBF_T_INDEX_TO_TYPE[field.type],
                 number=field.number,
+                default=default,
+                is_map=is_map,
                 label=label,
             ))
-        messages_result[message_data.full_name] = MessageData(
-            name=message_data.name,
-            message=message,
-            full_name=message_data.full_name,
-            properties=properties,
-        )
+        result_message.fields = fields
+        update_if_map(result_message)
 
     def _parse_enum(
         self, enum_data: EnumDescriptor, result: dict[str, EnumData]
     ):
-        properties = []
+        fields = []
         message = None
         if enum_data.containing_type is not None:
             message = enum_data.containing_type.full_name
 
         for value_name, value_data in enum_data.values_by_name.items():
             value_data: EnumValueDescriptor
-            properties.append(EnumProperty(
+            fields.append(EnumField(
                 name=value_name,
                 number=value_data.number,
             ))
         result[enum_data.full_name] = EnumData(
             name=enum_data.name,
-            message=message,
+            parent_message=message,
             full_name=enum_data.full_name,
-            properties=properties,
+            fields=fields,
         )
 
-    def execute_files(self) -> dict[str, ModuleType]:
-        result = import_in_memory_module_code(self.generated_data)
-        pool = descriptor_pool.Default()
+    def get_structures(self) -> dict[str, ProtoFileStructure]:
+        pool = self.descriptor_pool
+        result = {}
 
-        for file_relative in self.proto_paths.get_proto_files_relative():
-            file_descriptor: FileDescriptor = pool.FindFileByName(file_relative)
+        for file_relative in self.proto_paths.get_relative_map().values():
+            try:
+                file_descriptor = pool.FindFileByName(file_relative)
+            except KeyError as e:
+                raise KeyError(f"Required component not found: {e}")
             services_result = {}
             messages_result = {}
             enums_result = {}
 
             for name, service_data in file_descriptor.services_by_name.items():
                 service_data: ServiceDescriptor
-
                 methods_result = {}
 
                 for method in service_data.methods:
+                    method: MethodDescriptor
                     methods_result[method.name] = MethodData(
                         name=method.name,
-                        input_param=ParameterData(
-                            message=method.input_type.full_name
+                        input_message=InMethodMessageData(
+                            name=method.input_type.full_name,
+                            streaming=method.client_streaming,
                         ),
-                        output_param=ParameterData(
-                            message=method.output_type.full_name
+                        output_message=InMethodMessageData(
+                            name=method.output_type.full_name,
+                            streaming=method.server_streaming,
                         ),
                     )
                 services_result[service_data.full_name] = ServiceData(
@@ -253,8 +241,8 @@ class GRPCCompiler:
             for enum_data in file_descriptor.enum_types_by_name.values():
                 self._parse_enum(enum_data, enums_result)
 
-            self._proto_structure[file_relative] = ProtoFileStructure(
-                package=file_descriptor.package,
+            result[file_descriptor.name] = ProtoFileStructure(
+                package=file_descriptor.package or None,
                 messages=messages_result,
                 services=services_result,
                 enums=enums_result,
