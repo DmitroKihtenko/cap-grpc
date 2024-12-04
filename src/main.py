@@ -9,9 +9,7 @@ from grpc.aio import Server
 
 from logs import configure_all
 from server import create_server
-from utils import (
-    get_exception_error, read_file_bytes, parse_from_yaml
-)
+from utils import get_exception_error, read_file_bytes, parse_from_yaml
 from config import parse_config
 from server.configurers import GRPCServerConfigurer
 
