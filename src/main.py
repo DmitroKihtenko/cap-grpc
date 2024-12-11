@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 import sys
-from signal import SIGINT, SIGTERM
+from signal import SIGINT, SIGTERM, signal
 
 from grpc.aio import Server
 
@@ -73,7 +73,6 @@ async def shutdown_grpc_servers(
             server_data[1].response_processor.clean_resources()
         )
     await asyncio.gather(*close_resources_functions)
-    logger.debug("All resources released")
 
 
 async def wait_for_servers_termination(
@@ -90,16 +89,13 @@ async def run_servers(
     await start_grpc_servers(servers)
 
     loop = asyncio.get_event_loop()
-    stop_event = asyncio.Event()
 
-    def grace_shutdown():
-        loop.create_task(shutdown_grpc_servers(servers))
-        stop_event.set()
+    def grace_shutdown(*args):
+        asyncio.run_coroutine_threadsafe(shutdown_grpc_servers(servers), loop)
 
-    loop.add_signal_handler(SIGINT, grace_shutdown)
-    loop.add_signal_handler(SIGTERM, grace_shutdown)
+    signal(SIGINT, grace_shutdown)
+    signal(SIGTERM, grace_shutdown)
 
-    await stop_event.wait()
     await wait_for_servers_termination(servers)
 
 

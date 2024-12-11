@@ -79,8 +79,6 @@ def check_methods(
 
 
 class GRPCServerConfigurer:
-    SERVICER_FORMAT = "{}MockServicer"
-
     def __init__(
         self,
         object_resolver: ProtoObjectResolver,

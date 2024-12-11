@@ -130,7 +130,7 @@ class APILogProcessor:
         }
 
         error_details = context.details()
-        if error_details:
+        if error_details is not None:
             extra["error_details"] = error_details
         code = context.code()
         if code is not None:

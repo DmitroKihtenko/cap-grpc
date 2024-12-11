@@ -137,7 +137,7 @@ class Config(BaseConfigModel):
         console=True,
         level=LoggingLevel.INFO,
         format=LoggingFormat.YAML,
-        format_line="%(message)s, (request_message)s %(response_message)s "
+        format_line="%(message)s, %(request_message)s %(response_message)s "
                     "%(method)s %(service)s %(code)s %(error_details)s"
                     "%(metadata)s %(alias)s %(timestamp)s",
     )

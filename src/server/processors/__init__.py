@@ -125,6 +125,7 @@ class ResponseProcessor:
                     meta.method_data.output_message.name,
                     response_dict,
                 )
+                log_trailers_func(context, meta)
                 log_out_message_func(response_dict, context, meta)
                 return response
             except AbortError:
@@ -133,12 +134,14 @@ class ResponseProcessor:
                 raise
             except Exception as e:
                 logger.error(get_exception_error(e))
-                log_trailers_func(context, meta)
-                log_error_func(context, meta)
-                await context.abort(
-                    StatusCode.UNKNOWN,
-                    "Mock API server internal error",
-                )
+                try:
+                    await context.abort(
+                        StatusCode.UNKNOWN,
+                        "Mock API server internal error",
+                    )
+                finally:
+                    log_trailers_func(context, meta)
+                    log_error_func(context, meta)
 
         async def process_stream_response(
             input: object, context: ServicerContext
@@ -185,13 +188,13 @@ class ResponseProcessor:
             except Exception as e:
                 code = StatusCode.UNKNOWN
                 message = "Mock API server internal error"
-
                 logger.error(get_exception_error(e))
-                log_trailers_func(context, meta)
-                context.set_code(code)
-                context.set_details(message)
-                log_error_func(context, meta)
-                await context.abort(code, message)
+                try:
+                    await context.abort(code, message)
+                finally:
+                    log_trailers_func(context, meta)
+                    log_error_func(context, meta)
+
             log_trailers_func(context, meta)
 
         if method_data.output_message.streaming:
