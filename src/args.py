@@ -1,4 +1,5 @@
 from argparse import Namespace, ArgumentParser
+from sys import exit
 
 
 def get_args() -> Namespace:
